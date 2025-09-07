@@ -1,0 +1,4 @@
+opencv-python
+twilio
+gradio-webrtc==0.0.4
+onnxruntime-gpu
