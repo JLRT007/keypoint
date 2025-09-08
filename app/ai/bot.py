@@ -1,8 +1,10 @@
 import os
 from openai import OpenAI
+from dotenv import load_dotenv
 def ai_advice(advice):
+    load_dotenv()
     client = OpenAI(
-         api_key="b38284ea9b803460419c3568306c53437630c4b5",  # 含有 AI Studio 访问令牌的环境变量，https://aistudio.baidu.com/account/accessToken,
+         #api_key=os.environ.get("AI_STUDIO_API_KEY"),  # 含有 AI Studio 访问令牌的环境变量，https://aistudio.baidu.com/account/accessToken,
          base_url="https://aistudio.baidu.com/llm/lmapi/v3",  # aistudio 大模型 api 服务域名
     )
     prompt = f'''现在你是我的私人健身教练,我正在锻炼身体。接下来我会给你用户仰卧起坐的指标结果，如下：{advice}。
