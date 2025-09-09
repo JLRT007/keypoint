@@ -55,6 +55,7 @@ class UniModel():
     def infer_vid(self, video_file=None, camera_id=-1):
         #ywqz_list = []
         results_list = []
+        frame_timestamp_list = []
         if camera_id != -1:
             capture = cv2.VideoCapture(camera_id)
         else:
@@ -65,6 +66,7 @@ class UniModel():
         height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = int(capture.get(cv2.CAP_PROP_FPS))
         frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+
         print("fps: %d, frame_count: %d" % (fps, frame_count))
         fourcc = cv2.VideoWriter_fourcc(* 'mp4v')
         writer = cv2.VideoWriter(out_path, fourcc, fps, (width, height))
@@ -85,9 +87,8 @@ class UniModel():
                 current_keypoints = np.array(results['keypoint'][0][0])
                 smooth_keypoints = keypoint_smoothing.smooth_process(current_keypoints)
                 results['keypoint'][0][0] = smooth_keypoints.tolist()
-                #ywqz = results['keypoint'][0][0][0][1]#仰卧起坐头部关键点数据
-                #ywqz_list.append(ywqz)
-                results_list.append(results['keypoint'][0][0])
+                results_list.append(results['keypoint'][0][0])#存关键点数据
+
             frame = self.visualize(frame, results)
             writer.write(frame)
         writer.release()
@@ -97,7 +98,7 @@ class UniModel():
         with open(save_path, "w", encoding="utf-8") as f:
             json.dump(results_list, f, ensure_ascii=False, indent=2)
         print(f"关键点数据已保存到 {save_path}")
-        return out_path,results_list
+        return out_path,results_list,fps
                 
     def visualize(self, img_file, results, visual_thresh=0.5):
         skeletons, scores = results['keypoint']

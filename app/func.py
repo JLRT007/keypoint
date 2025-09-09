@@ -1,6 +1,6 @@
 import math
 import numpy as np
-
+import time
 
 class YWQZ:
     """仰卧起坐动作评估类，用于分析关键点数据并评估动作标准性"""
@@ -200,3 +200,208 @@ def ywqz_count(y):
                 count_list.append(y[i])
                 flag = not flag
     return math.floor(count / 2)
+
+
+class PlankEvaluator:
+    """平板支撑动作评估类，用于分析关键点数据、评估动作标准性并计时"""
+
+    def __init__(self,
+                 body_angle_tolerance=30,  # 身体直线角度容忍度（度）
+                 hip_angle_low=140,  # 髋部角度下限（接近直线）
+                 hip_angle_high=180,  # 髋部角度上限（不超过直线）
+                 shoulder_angle_low=70,  # 肩部角度下限（不小于80度）
+                 shoulder_angle_high=110):  # 肩部角度上限（不大于100度）
+        """初始化评估参数"""
+        self.body_angle_tolerance = body_angle_tolerance
+        self.hip_angle_low = hip_angle_low
+        self.hip_angle_high = hip_angle_high
+        self.shoulder_angle_low = shoulder_angle_low
+        self.shoulder_angle_high = shoulder_angle_high
+
+        # 计时相关变量
+        self.start_time = None
+        self.end_time = None
+        self.is_valid = False  # 当前是否为有效平板支撑姿态
+        self.total_duration = 0  # 总有效时长（秒）
+
+        # 评估结果缓存
+        self.evaluation_history = []
+        self.valid_frame = 0
+    @staticmethod
+    def calculate_angle(p1, p2, p3):
+        """计算三点形成的角度（p2为顶点）"""
+        v1 = np.array(p1) - np.array(p2)
+        v2 = np.array(p3) - np.array(p2)
+        cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-8)
+        return np.degrees(np.arccos(np.clip(cos_angle, -1.0, 1.0)))
+
+    @staticmethod
+    def calculate_line_slope(p1, p2):
+        """计算两点连线的斜率（用于判断身体是否保持直线）"""
+        if p2[0] - p1[0] == 0:
+            return np.inf  # 垂直直线
+        return (p2[1] - p1[1]) / (p2[0] - p1[0])
+
+    def is_body_aligned(self, keypoints):
+        """判断身体是否保持直线（肩、髋、踝连线）"""
+        # 取左肩、左髋、左脚踝三点（右侧可作为备用）
+        left_shoulder = keypoints[5][:2]
+        left_hip = keypoints[11][:2]
+        left_ankle = keypoints[15][:2]
+
+        # 计算肩-髋和髋-踝的斜率差
+        slope1 = self.calculate_line_slope(left_shoulder, left_hip)
+        slope2 = self.calculate_line_slope(left_hip, left_ankle)
+
+        # 斜率差在容忍范围内视为直线（转为角度差判断）
+        angle_diff = abs(np.degrees(np.arctan(slope1)) - np.degrees(np.arctan(slope2)))
+        return angle_diff < self.body_angle_tolerance
+
+    def is_hip_angle_valid(self, keypoints):
+        """判断髋部角度是否标准（不塌陷、不上翘）"""
+        # 髋部角度：肩-髋-踝
+        left_shoulder = keypoints[5][:2]
+        left_hip = keypoints[11][:2]
+        left_ankle = keypoints[15][:2]
+        hip_angle = self.calculate_angle(left_shoulder, left_hip, left_ankle)
+
+        return self.hip_angle_low < hip_angle < self.hip_angle_high
+
+    def is_shoulder_angle_valid(self, keypoints):
+        """判断肩部角度是否标准（不耸肩、不塌肩）"""
+        # 肩部角度：肘-肩-髋
+        left_wrist = keypoints[8][:2]
+        left_shoulder = keypoints[6][:2]
+        left_hip = keypoints[12][:2]
+        shoulder_angle = self.calculate_angle(left_wrist, left_shoulder, left_hip)
+
+        return self.shoulder_angle_low < shoulder_angle < self.shoulder_angle_high
+
+    def is_elbow_position_valid(self, keypoints):
+        """判断肘部是否位于肩部正下方"""
+        # 肘部x坐标应接近肩部x坐标
+        left_shoulder_x = keypoints[5][0]
+        left_elbow_x = keypoints[7][0]
+        x_diff = abs(left_shoulder_x - left_elbow_x)
+
+        # 允许的x方向偏差（根据实际分辨率调整，这里用肩部宽度的1/3作为参考）
+        shoulder_width = abs(keypoints[5][0] - keypoints[6][0])
+        return x_diff < shoulder_width / 3
+
+    def evaluate_frame(self, keypoints):
+        """评估单帧动作是否标准"""
+        # 检查关键点位是否有效（置信度>0.5）
+        critical_points = [5, 6, 7, 8, 9, 10, 11, 12, 15, 16]  # 肩、肘、腕、髋、踝
+        if any(keypoints[kp][2] < 0.2 for kp in critical_points):
+            return {
+                "valid": False,
+                "reason": "关键点位识别不清",
+                "body_aligned": None,
+                "hip_angle": None,
+                "shoulder_angle": None,
+                "elbow_position": None
+            }
+
+        # 各项指标评估
+        body_aligned = self.is_body_aligned(keypoints)
+        hip_angle_valid = self.is_hip_angle_valid(keypoints)
+        shoulder_angle_valid = self.is_shoulder_angle_valid(keypoints)
+        elbow_valid = self.is_elbow_position_valid(keypoints)
+
+        #print(shoulder_angle_valid)
+        # 综合判断
+        valid = body_aligned and hip_angle_valid and shoulder_angle_valid
+
+        result = {
+            "valid": valid,
+            "reason": [] if valid else [
+                "身体未保持直线" if not body_aligned else "",
+                "髋部塌陷或上翘" if not hip_angle_valid else "",
+                "肩部角度不标准" if not shoulder_angle_valid else "",
+                "肘部未在肩部正下方" if not elbow_valid else ""
+            ],
+            "body_aligned": body_aligned,
+            "hip_angle": hip_angle_valid,
+            "shoulder_angle": shoulder_angle_valid,
+            "elbow_position": elbow_valid
+        }
+
+        # 过滤空字符串原因
+        result["reason"] = [r for r in result["reason"] if r]
+        self.evaluation_history.append(result)
+        #print(result)
+        return result
+
+    def update_timer(self, is_valid,current_timestamp: float):
+        """根据当前帧是否有效更新计时器"""
+
+
+        # 状态1：从无效→有效（开始计时）
+        if is_valid and not self.is_valid:
+            self.start_time = current_timestamp  # 记录开始时间
+            self.is_valid = True
+
+        # 状态2：从有效→无效（结束计时并累加）
+        elif not is_valid and self.is_valid:
+            if self.start_time is not None:
+                # 计算当前有效时段的时长（避免start_time未初始化）
+                duration = current_timestamp - self.start_time
+                self.total_duration += max(0.0, duration)  # 确保时长非负
+            self.is_valid = False
+
+    def get_current_duration(self):
+        """获取当前累计有效时长（秒）"""
+        if self.is_valid and self.start_time is not None:
+            # 若当前仍在有效状态，实时计算
+            return self.total_duration + (time.time() - self.start_time)
+        return self.total_duration
+    def get_time(self,is_valid):
+        if is_valid:
+            self.valid_frame+=1
+
+
+    def generate_advice(self):
+        """根据历史评估结果生成综合建议"""
+        if not self.evaluation_history:
+            return ["暂无评估数据"]
+
+        # 统计各错误出现频率
+        error_counts = {
+            "body_aligned": 0,
+            "hip_angle": 0,
+            "shoulder_angle": 0,
+            "elbow_position": 0
+        }
+
+        for eval in self.evaluation_history:
+            if not eval["body_aligned"]:
+                error_counts["body_aligned"] += 1
+            if not eval["hip_angle"]:
+                error_counts["hip_angle"] += 1
+            if not eval["shoulder_angle"]:
+                error_counts["shoulder_angle"] += 1
+            if not eval["elbow_position"]:
+                error_counts["elbow_position"] += 1
+
+        # 生成建议（优先显示最频繁的错误）
+        advice = []
+        total_frames = len(self.evaluation_history)
+
+        if error_counts["body_aligned"] > total_frames * 0.3:
+            advice.append("保持身体成一条直线，避免腰部塌陷或臀部上翘")
+        if error_counts["hip_angle"] > total_frames * 0.3:
+            advice.append("调整髋部位置，保持与身体其他部位成直线")
+        if error_counts["shoulder_angle"] > total_frames * 0.3:
+            advice.append("肩部不要过度前倾或后仰，保持自然弯曲")
+        if error_counts["elbow_position"] > total_frames * 0.3:
+            advice.append("确保肘部位于肩部正下方，不要外扩")
+
+        return advice if advice else ["动作标准，继续保持！"]
+
+    def reset(self):
+        """重置评估器状态（用于新一轮评估）"""
+        self.start_time = None
+        self.end_time = None
+        self.is_valid = False
+        self.total_duration = 0
+        self.evaluation_history = []
